@@ -5,6 +5,7 @@ This is the public repository for my thesis work investigating the use of machin
 For a full discussion of the work, please read z5308157_Chris_Wise_Honours_Thesis.pdf
 
 ![diagram of transformer-based qubit simulator](./transformer_qubit_sim_diagram.png)
+
 ## System Identification
 
 ### Predicting Qubit-Environment Interactions

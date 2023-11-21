@@ -1,6 +1,6 @@
 # ML for Qubit Control and System Identification
 
-This is the public repository for my thesis work investigating the use of machine learning for qubit control and system identification. Part of this work is/was presented at the Quantum Techniques in Machine Learning (QTML) 2023 and ANZCOP-AIP Summer Meeting 2023.
+This is the public repository for my thesis work investigating the use of ML for qubit control and system identification. Part of this work is/was presented at the Quantum Techniques in Machine Learning (QTML) 2023 and ANZCOP-AIP Summer Meeting 2023.
 
 For a full discussion of the work, please read z5308157_Chris_Wise_Honours_Thesis.pdf
 
@@ -31,7 +31,7 @@ See:
 
 ## Furture Work
 1. Implement divide and conquer approach for the sequential matrix products used in final timestep unitary computation
-2. Add encoder-only transformer to learn control pulse disortion
+2. Add encoder-only transformer to learn control pulse distortion
 3. Perform gradient-based optimisation of control pulses with transformer-based qubit simulator
 4. Extend deduction of qubit-environment interactions to two qubit systems
 5. Reimplement Monte Carlo qubit simulator in Mojo 🔥

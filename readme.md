@@ -30,7 +30,7 @@ See:
 - ./time_series_to_noise/monte_carlo_qubit_simulation.py
 
 ## Furture Work
-1. Implement divide and conquer approach for the sequential matrix products used in final timestep unitary computation
+1. ~~Implement divide and conquer approach for the sequential matrix products used in final timestep unitary computation~~
 2. Add encoder-only transformer to learn control pulse distortion
 3. Perform gradient-based optimisation of control pulses with transformer-based qubit simulator
 4. Extend deduction of qubit-environment interactions to two qubit systems

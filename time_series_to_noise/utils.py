@@ -41,7 +41,7 @@ def batch_based_matrix_trace(matrix: torch.Tensor) -> torch.Tensor:
     return torch.diagonal(matrix, offset=0, dim1=-1, dim2=-2).sum(-1)
 
 
-def compute_fidelity(U, V):
+def compute_fidelity(U: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
     """
     Calculates the fidelity between two unitary matrices.
 
@@ -479,6 +479,83 @@ def load_qdataset(
         return dict_of_data
 
 
+def load_data(
+    filename_dataset_path_tuple: Tuple[str, str, List[str]]
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Load the dataset of pulses and Vo operators.
+
+    Args:
+        filename: Name of the file to load.
+        path_to_dataset: Path to the dataset zip file.
+
+    Returns:
+        pulses: Array of pulses.
+        Vx: Array of X Vo operators.
+        Vy: Array of Y Vo operators.
+        Vz: Array of Z Vo operators.
+    """
+    filename, path_to_dataset, data_of_interest = filename_dataset_path_tuple
+    with open(f"{path_to_dataset}/{filename}", "rb") as f:
+        data = pickle.load(f)
+        return [data[key] for key in data_of_interest]
+
+
+def load_Vo_dataset(
+    path_to_dataset: str,
+    num_examples: int,
+    data_of_interest: List[str],
+    need_extended: bool = False,
+) -> List[torch.Tensor]:
+    """
+    Load the dataset of pulses and Vo operators.
+
+    Args:
+        path_to_dataset: Path to the dataset zip file.
+        num_examples: Number of examples to load.
+
+    Returns:
+        pulses: Tensor of pulses.
+        Vx: Tensor of X Vo operators.
+        Vy: Tensor of Y Vo operators.
+        Vz: Tensor of Z Vo operators.
+    """
+    filenames = os.listdir(path_to_dataset)
+
+    filenames_pkl_only = [
+        filename for filename in filenames if filename.endswith(".pkl")
+    ]
+
+    filenames = filenames_pkl_only[:num_examples]
+
+    with multiprocessing.Pool() as pool:
+        func = pool.map(
+            load_data,
+            [
+                (filename, path_to_dataset, data_of_interest)
+                for filename in filenames
+            ],
+        )
+        data = zip(*func)
+
+    if not need_extended:
+        return [torch.tensor(np.array(d)) for d in data]
+
+    with multiprocessing.Pool() as pool:
+        func = pool.map(
+            load_data,
+            [
+                (filename, data_path_extended, ["expectations", "pulses"])
+                for filename in filenames
+            ],
+        )
+        data_extended = zip(*func)
+
+    return [torch.tensor(np.array(d)) for d in data], [
+        torch.tensor(np.array(d)) for d in data_extended
+    ]
+
+
 def calculate_psi_theta_mu(
     qdq_dagger: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -561,7 +638,7 @@ def calculate_ground_turth_parameters(
 
 
 def __return_qubit_initial_states_and_observables_tensor(
-    system_dimension: int, special_case: bool = False
+    system_dimension: int,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     A hidden function that returns the tensor of qubit initial states
@@ -580,9 +657,6 @@ def __return_qubit_initial_states_and_observables_tensor(
             system_dimension
         )
     """
-    if special_case:
-        return MIXED, COMBINED_SIGMA_TENSOR
-
     if system_dimension == 2:
         return LIST_OF_PAULI_EIGENSTATES, COMBINED_SIGMA_TENSOR
 
@@ -593,7 +667,7 @@ def __return_qubit_initial_states_and_observables_tensor(
 
 
 def compute_ctrl_unitary_init_state_obvs_product(
-    control_unitaries: torch.Tensor, special_case: bool = False
+    control_unitaries: torch.Tensor,
 ) -> torch.Tensor:
     """
     Computes the matrix product of the control unitaries with the
@@ -616,7 +690,7 @@ def compute_ctrl_unitary_init_state_obvs_product(
         initial_qubit_states,
         observables,
     ) = __return_qubit_initial_states_and_observables_tensor(
-        control_unitaries.shape[-1], special_case
+        control_unitaries.shape[-1]
     )
 
     # tensor of shape (batch_size, 1, 6, system_dim, system_dim)
@@ -645,7 +719,6 @@ def compute_ctrl_unitary_init_state_obvs_product(
 def calculate_expectation_values(
     Vo_operators: torch.Tensor,
     control_unitaries: torch.Tensor,
-    special_case: bool = False,
 ) -> torch.Tensor:
     """
     Calculate the expectation values of a set of Pauli operators.
@@ -680,9 +753,7 @@ def calculate_expectation_values(
 
     """
     control_based_evolution_matrices = (
-        compute_ctrl_unitary_init_state_obvs_product(
-            control_unitaries, special_case
-        )
+        compute_ctrl_unitary_init_state_obvs_product(control_unitaries)
     )
 
     expectation_values_list = [
@@ -754,7 +825,7 @@ def calculate_vo_alpha_beta_gamma(
     Y_coefficients: torch.Tensor,
     Z_coefficients: torch.Tensor,
     expectations: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> list[torch.Tensor]:
     """
     Calculate the parameters alpha, beta, gamma, and delta for the
     respective noise encoding matrices, Vx, Vy, and Vz.
@@ -862,7 +933,7 @@ def calculate_xyz_vo_from_expectation_values_wrapper(
 def compute_convariance_in_uncertainity_for_xyz_alpha_beta_gamma(
     control_unitaries: torch.Tensor,
     expectation_variances: torch.Tensor,
-) -> torch.Tensor:
+) -> list[torch.Tensor]:
     """
     Calculate the expectation values of the X, Y, and Z Pauli operators.
 

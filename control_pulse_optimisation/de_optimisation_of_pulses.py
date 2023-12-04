@@ -237,14 +237,46 @@ class QubitSimulator:
     delta_t: float
     max_amp: float
     num_qubits: int
+    control_sequence_length: int
     noise_dynamic_operators: torch.Tensor
     control_static_operators: torch.Tensor
     control_dynamic_operators: torch.Tensor
     noise_generator: CombinedNoiseGenerator
     ideal_matrices: Optional[torch.Tensor] = None
 
-    def change_ideal_matrices(self, new_ideal_matrices: torch.Tensor):
-        self.ideal_matrices = new_ideal_matrices
+    def compute_final_control_unitary(
+        self,
+        control_pulse_time_series: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size = control_pulse_time_series.shape[0]
+
+        batched_control_operators = self.control_dynamic_operators.repeat(
+            batch_size, 1, 1, 1
+        )
+
+        batched_static_operators = self.control_static_operators.repeat(
+            batch_size, 1, 1, 1
+        )
+
+        control_hamiltonian = (
+            construct_hamiltonian_for_each_timestep_noise_relisation_batchwise(
+                time_evolving_elements=control_pulse_time_series
+                * self.max_amp,
+                operators_for_time_evolving_elements=batched_control_operators,
+                operators_for_static_elements=batched_static_operators,
+            )
+        )
+
+        exponentiated_scaled_hamiltonians_ctrl = (
+            return_exponentiated_scaled_hamiltonians(
+                hamiltonians=control_hamiltonian,
+                delta_T=self.delta_t,
+            )
+        )
+
+        return compute_unitary_at_timestep(
+            exponential_hamiltonians=exponentiated_scaled_hamiltonians_ctrl,
+        )
 
     def compute_vo_operators_and_final_control_unitaries(
         self,
@@ -319,7 +351,7 @@ class QubitSimulator:
 
         noise = self.noise_generator.generate_noise_instance(
             batch_size=batch_size
-        )
+        )[:, : self.control_sequence_length]
 
         noise_hamiltonian = (
             construct_hamiltonian_for_each_timestep_noise_relisation_batchwise(
@@ -344,13 +376,11 @@ class QubitSimulator:
             exponential_hamiltonians=exponentiated_scaled_hamiltonians_interaction,
         )
 
-        self.lastest_simulation_final_control_unitaries = (
-            all_timesteps_control_unitaries[:, -1]
-        )
-
         return (
             construct_vo_operator_for_batch(
-                final_step_control_unitaries=self.lastest_simulation_final_control_unitaries,
+                final_step_control_unitaries=all_timesteps_control_unitaries[
+                    :, -1
+                ],
                 final_step_interaction_unitaries=final_timestep_interaction_unitaries,
             ),
             all_timesteps_control_unitaries[:, -1],
@@ -359,7 +389,7 @@ class QubitSimulator:
     def compute_expectations(
         self,
         Vo_operators: torch.Tensor,
-        final_control_unitaries: Optional[torch.Tensor] = None,
+        final_control_unitaries: torch.Tensor,
     ) -> torch.Tensor:
         """
         Compute the expectation values given the VO operators and the
@@ -398,26 +428,6 @@ class QubitSimulator:
             control_unitaries=final_control_unitaries,
         )
 
-    def compute_fidelity_vo_operators_and_final_control_unitaries(
-        self,
-        vo_operators: torch.Tensor,
-        final_control_unitaries: torch.Tensor,
-    ) -> List[float]:
-        return fidelity_batch_of_matrices(
-            rho=torch.cat(
-                (vo_operators, final_control_unitaries.unsqueeze(0)),
-                dim=0,
-            ),
-            sigma=self.ideal_matrices,
-        )
-
-    def compute_fidelity_score(
-        self,
-        fidelities: torch.Tensor,
-        num_qubits: int,
-    ) -> List[float]:
-        return (2 ** (2 * num_qubits) - torch.sum(fidelities, dim=0)).tolist()
-
     def time_series_to_process_fidelity_score(
         self,
         time_series: torch.Tensor,
@@ -436,18 +446,18 @@ class QubitSimulator:
         )
 
         expectations_plus = expectations[:, :3]
-        expectations_minus = expectations[:, 3:6]
-        expectations_zeros = expectations[:, 12:15]
-        expectations_ones = expectations[:, 15:]
+        expectations_minus = expectations[:, 9:12]
+        expectations_zero = expectations[:, 12:15]
+        expectations_one = expectations[:, 15:]
 
-        reconstructed_zeros = calculate_state_from_observable_expectations(
-            expectation_values=expectations_zeros,
+        reconstructed_ones = calculate_state_from_observable_expectations(
+            expectation_values=expectations_one,
             observables=COMBINED_SIGMA_TENSOR.squeeze(),
             identity=SIGMA_I,
         )
 
-        reconstructed_ones = calculate_state_from_observable_expectations(
-            expectation_values=expectations_ones,
+        reconstructed_zeros = calculate_state_from_observable_expectations(
+            expectation_values=expectations_zero,
             observables=COMBINED_SIGMA_TENSOR.squeeze(),
             identity=SIGMA_I,
         )
@@ -547,14 +557,6 @@ def objective_function(
             final_control_unitaries=actual_final_control_unitaries,
         )
 
-        actual_expectations = torch.cat(
-            (
-                actual_expectations[:, :6],
-                actual_expectations[:, 12:],
-            ),
-            dim=-1,
-        )
-
         scores = torch.max(
             torch.abs(actual_expectations - ideal_expectations), dim=-1
         ).values
@@ -562,53 +564,25 @@ def objective_function(
         return scores
 
 
-def mutate_control_pulse_sequence(
-    original_control_pulse_sequence: torch.Tensor,
-    std: torch.Tensor,
-) -> torch.Tensor:
-    return TruncatedNormal(
-        loc=original_control_pulse_sequence,
-        scale=std,
-        a=-1.0,
-        b=1.0,
-    ).sample()
-
-
 def return_init_sol(
-    init_sol_type: str,
     sequence_length: int,
-    std: float,
+    noise_amount: float,
     gate: str,
     population_size: int,
 ):
-    if "uniform_distro" == init_sol_type:
-        return (
-            2
-            * torch.rand(
-                (population_size, sequence_length, number_of_control_channels)
-            ).to(DEVICE)
-            - 1
-        )
-
-    if "normal_distro" == init_sol_type:
-        return mutate_control_pulse_sequence(
-            torch.zeros(
-                (population_size, sequence_length, number_of_control_channels)
-            ).to(DEVICE),
-            std=std,
-        )
-
     ideal_noiseless = (
         torch.load(
-            f"./control_pulse_optimisation/ideal_noiseless_control_pulses/ideal_noiseless_control_pulses_sequence_length_{sequence_length}.pt",
-            map_location=DEVICE,
+            f"./new_noiseless_ideal_pulses_seq_len_{sequence_length}.pt",
         )[gate]
-        .unsqueeze(0)
         .to(DEVICE)
-    )
+    ).repeat(population_size, 1, 1)
 
-    return mutate_control_pulse_sequence(
-        ideal_noiseless.repeat(population_size, 1, 1), std=std
+    noise = 2 * torch.rand_like(ideal_noiseless) - 1
+
+    return torch.clamp(
+        ideal_noiseless + noise_amount * noise,
+        min=-1.0,
+        max=1.0,
     )
 
 
@@ -618,14 +592,17 @@ def find_optimal_control_pulses(
     num_generations: int,
     crossover_rate: float,
     differential_weight: float,
-    init_sol_type: str,
 ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
+    time_steps = 512
+
     n3_noise_generator = N3NoiseGenerator(
         number_of_noise_realisations=NUMBER_OF_NOISE_RELISATIONS,
-        number_of_time_steps=sequence_length,
+        number_of_time_steps=time_steps,
+        total_time=1.0,
+        g=0.8,
     )
 
-    n6_noise_generator = SquaredScaledNoiseGenerator()
+    n6_noise_generator = SquaredScaledNoiseGenerator(g=0.8)
 
     n3n6_noise_generator = CombinedNoiseGenerator(
         x_noise_generator=n3_noise_generator,
@@ -633,9 +610,10 @@ def find_optimal_control_pulses(
     )
 
     sim = QubitSimulator(
-        delta_t=TOTAL_TIME / sequence_length,
+        delta_t=1 / time_steps,
         max_amp=MAX_AMP,
         num_qubits=NUM_QUBITS,
+        control_sequence_length=sequence_length,
         noise_dynamic_operators=noise_dynamic_operators,
         control_static_operators=control_static_operators,
         control_dynamic_operators=control_dynamic_operators,
@@ -647,9 +625,8 @@ def find_optimal_control_pulses(
 
     for gate in UNIVERSAL_GATE_SET_SINGLE_QUBIT.keys():
         population = return_init_sol(
-            init_sol_type=init_sol_type,
             sequence_length=sequence_length,
-            std=0.03125,
+            noise_amount=0.4,
             gate=gate,
             population_size=population_size,
         )
@@ -659,10 +636,6 @@ def find_optimal_control_pulses(
             final_control_unitaries=UNIVERSAL_GATE_SET_SINGLE_QUBIT[
                 gate
             ].unsqueeze(0),
-        )
-
-        ideal_expectations = torch.cat(
-            (ideal_expectations[:, :6], ideal_expectations[:, 12:]), dim=-1
         )
 
         best_score = float("inf")

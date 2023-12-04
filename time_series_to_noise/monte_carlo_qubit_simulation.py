@@ -191,9 +191,32 @@ def compute_unitary_at_timestep(
                 system_dimension
             )
     """
-    return reduce(
-        torch.matmul, exponential_hamiltonians.flip(dims=[1]).unbind(dim=1)
+    (
+        _,
+        num_time_steps,
+        *_,
+    ) = exponential_hamiltonians.shape
+
+    if num_time_steps == 1:
+        return exponential_hamiltonians[:, 0]
+
+    if num_time_steps % 2 == 1:
+        last_matrix = exponential_hamiltonians[:, -1:]
+        exponential_hamiltonians = exponential_hamiltonians[:, :-1]
+    else:
+        last_matrix = None
+
+    even_exponential_hamiltonians = exponential_hamiltonians[:, 0::2]
+    odd_exponential_hamiltonians = exponential_hamiltonians[:, 1::2]
+
+    product = torch.matmul(
+        odd_exponential_hamiltonians, even_exponential_hamiltonians
     )
+
+    if last_matrix is not None:
+        product = torch.cat([product, last_matrix], dim=1)
+
+    return compute_unitary_at_timestep(product)
 
 
 def compute_unitaries_for_all_time_steps(
@@ -298,7 +321,7 @@ def create_interaction_hamiltonian_for_each_timestep_noise_relisation_batchwise(
 
 def __return_observables_for_vo_construction(
     system_dimension: int,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> torch.Tensor:
     """
     Returns the observables for the construction of the VO operator.
     Handles reshaping of the observables and if the signle or two qubit
@@ -474,11 +497,9 @@ def generate_gaussian_pulses(
     return signal.sum(dim=1)
 
 
-#
 def create_DFT_matrix_of_LTI_transfer_func_for_signal_distortion(
     total_time: Union[float, int],
     number_of_time_steps: int,
-    batch_size: int,
 ) -> torch.Tensor:
     """
     A function which creates a linear time invariant system for
@@ -549,7 +570,7 @@ def create_DFT_matrix_of_LTI_transfer_func_for_signal_distortion(
         (1, 1, number_of_time_steps, number_of_time_steps),
     )
 
-    return dft_of_transfer_func.repeat(batch_size, 1, 1, 1)
+    return dft_of_transfer_func
 
 
 def generate_distorted_signal(
@@ -641,7 +662,6 @@ def generate_spectal_density_noise_profile_five(
     return 1 / (frequencies[frequencies >= 0] + 1) ** alpha
 
 
-#
 def generate_sqrt_scaled_spectral_density(
     total_time: Union[float, int],
     spectral_density: torch.Tensor,
